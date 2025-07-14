@@ -1,0 +1,24 @@
+name: Daily Fine-Tuning
+
+on:
+  schedule:
+    # Runs at 18:00 UTC every Monday–Friday
+    - cron: '0 18 * * 1-5'
+
+jobs:
+  fine_tune:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run daily fine-tune
+        run: python daily_finetune.py
