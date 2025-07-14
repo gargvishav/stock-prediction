@@ -32,13 +32,22 @@ seq_len = config['seq_len']
 
 # -------------------- Data Utilities --------------------
 
-def fetch_history(ticker, start, end):
+from datetime import datetime
+
+def fetch_history(ticker: str, start: str, end: str) -> pd.DataFrame:
     """
-    Download historical OHLCV data for a ticker.
-    Returns a DataFrame indexed by Date.
+    Download OHLCV for `ticker` from `start` to `end`.
+    Allows end='today' to mean the current date.
     """
+    # Translate 'today' into an actual date string
+    if isinstance(end, str) and end.lower() == 'today':
+        end = datetime.today().strftime('%Y-%m-%d')
+
     df = yf.download(ticker, start=start, end=end)
+    if df.empty:
+        raise ValueError(f"No data found for {ticker} from {start} to {end}.")
     return df
+
 
 
 def fetch_new_bar(ticker):
@@ -87,31 +96,31 @@ def add_technical_indicators(df):
 def build_sequences_cols(df, seq_len, feature_cols, scaler=None):
     """
     Builds sliding-window sequences from df using only the specified feature_cols.
-    Drops any rows with NaNs in the present feature columns before scaling.
-    Returns:
-      X: np.array of shape (n_samples, seq_len, n_features)
-      y: np.array of shape (n_samples,)
-      scaler: fitted MinMaxScaler
+    Drops rows with NaNs in those columns before scaling.
+    Raises a clear error if there isn't enough data to build at least one sequence.
     """
-    # 1) Determine which features are actually in df
+    # 1) Only use columns that actually exist
     present_feats = [c for c in feature_cols if c in df.columns]
-    if not present_feats:
-        raise ValueError(f"None of the feature_cols {feature_cols} are in the DataFrame")
+    if 'Close' not in present_feats:
+        raise ValueError("`Close` column is required for sequence targets.")
 
-    # 2) Attempt to drop rows where any of the present features are NaN
-    try:
-        df_clean = df.dropna(subset=present_feats)
-    except KeyError:
-        # If dropna subset fails, fall back to original df
-        df_clean = df.copy()
-    feats = df_clean[present_feats]
+    # 2) Drop NaNs in those columns
+    df_clean = df.dropna(subset=present_feats)
+    feats    = df_clean[present_feats]
 
-    # 3) Fit or reuse the scaler on the clean features
+    # 3) Must have at least seq_len+1 rows to form one (X,y)
+    if feats.shape[0] <= seq_len:
+        raise ValueError(
+            f"Not enough data to build sequences: "
+            f"need >{seq_len} rows after dropna, but got {feats.shape[0]}."
+        )
+
+    # 4) Fit or reuse scaler
     if scaler is None:
         scaler = MinMaxScaler().fit(feats)
     scaled = scaler.transform(feats)
 
-    # 4) Build sequences
+    # 5) Slide windows
     X, y = [], []
     close_idx = present_feats.index('Close')
     for i in range(seq_len, scaled.shape[0]):
@@ -119,6 +128,7 @@ def build_sequences_cols(df, seq_len, feature_cols, scaler=None):
         y.append(scaled[i, close_idx])
 
     return np.array(X), np.array(y), scaler
+
 
 # -------------------- PyTorch Dataset --------------------
 
