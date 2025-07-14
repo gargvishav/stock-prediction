@@ -86,23 +86,31 @@ def add_technical_indicators(df):
 
 def build_sequences_cols(df, seq_len, feature_cols, scaler=None):
     """
-    Given a DataFrame and a list of feature columns:
-    - Fits or reuses a MinMaxScaler to scale features.
-    - Builds sliding-window sequences of length seq_len.
-    Returns X (n_samples, seq_len, n_features), y (n_samples,), and the scaler.
+    Builds sliding-window sequences from df using only the specified feature_cols.
+    Drops any rows with NaNs in those columns before fitting or transforming the scaler.
+    Returns:
+      X: np.array of shape (n_samples, seq_len, n_features)
+      y: np.array of shape (n_samples,)
+      scaler: fitted MinMaxScaler
     """
-    feats = df[feature_cols]
+    # 1) Drop rows where any of the selected features are NaN
+    df_clean = df.dropna(subset=feature_cols)
+    feats    = df_clean[feature_cols]
+
+    # 2) Fit or reuse the scaler
     if scaler is None:
         scaler = MinMaxScaler().fit(feats)
-        scaled = scaler.transform(feats)
-    else:
-        scaled = scaler.transform(feats)
+    scaled = scaler.transform(feats)
+
+    # 3) Slide a window of length seq_len to build X and y (next-day Close)
     X, y = [], []
     close_idx = feature_cols.index('Close')
-    for i in range(seq_len, len(scaled)):
+    for i in range(seq_len, scaled.shape[0]):
         X.append(scaled[i-seq_len:i])
         y.append(scaled[i, close_idx])
+
     return np.array(X), np.array(y), scaler
+
 
 
 # -------------------- PyTorch Dataset --------------------
