@@ -87,33 +87,48 @@ def build_sequences_cols(df: pd.DataFrame,
     Raises clear errors if any required column is missing or not enough data.
     """
     # 1) Check required columns exist
-    missing = set(feature_cols) - set(df.columns)
-    if missing:
-        raise ValueError(f"build_sequences_cols: missing columns in DataFrame: {missing}")
+     feature_cols = ['Open','High','Low','Close','Volume','SMA14','RSI14','MACD_hist']
+    features = df[feature_cols]
 
-    # 2) Drop rows with NaNs in these columns
-    df_clean = df.dropna(subset=feature_cols)
-    feats    = df_clean[feature_cols]
-
-    # 3) Enough rows?
-    if feats.shape[0] <= seq_len:
-        raise ValueError(
-            f"Not enough data to build sequences: need >{seq_len} rows, got {feats.shape[0]}."
-        )
-
-    # 4) Scale
+    # 2. Fit or reuse the scaler on the features
     if scaler is None:
-        scaler = MinMaxScaler().fit(feats)
-    scaled = scaler.transform(feats)
+        scaler = MinMaxScaler()
+        scaled = scaler.fit_transform(features)
+    else:
+        scaled = scaler.transform(features)
 
-    # 5) Slide windows
+    # 3. Slide a window of length seq_len to build X, and get y = next-day Close
     X, y = [], []
     close_idx = feature_cols.index('Close')
-    for i in range(seq_len, scaled.shape[0]):
+    for i in range(seq_len, len(scaled)):
         X.append(scaled[i-seq_len:i])
         y.append(scaled[i, close_idx])
 
-    return np.array(X), np.array(y), scaler
+    # 4. Convert to NumPy arrays and return
+    X = np.array(X)
+    y = np.array(y)
+    return X, y, scaler
+
+# --- Now apply to your indicator-enriched DataFrame (df_ind) ---
+
+# 1️⃣ Chronological split of the enriched DataFrame into train/test
+split_idx = int(len(df_ind) * 0.8)
+train_df = df_ind.iloc[:split_idx]
+test_df  = df_ind.iloc[split_idx:]
+
+# 2️⃣ Build & scale sequences on the TRAIN set (scaler fitted here)
+seq_len = 60
+X_train, y_train, scaler = build_sequences(train_df, seq_len, scaler=None)
+
+# 3️⃣ Build sequences on the TEST set using the same scaler (no re‐fitting)
+X_test, y_test, _ = build_sequences(test_df, seq_len, scaler=scaler)
+
+# 4️⃣ Inspect shapes
+print(f"Train shapes: X={X_train.shape}, y={y_train.shape}")
+print(f"Test  shapes: X={X_test.shape}, y={y_test.shape}")
+
+
+
 
 # -------------------- PyTorch Dataset --------------------
 
