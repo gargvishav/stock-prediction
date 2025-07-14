@@ -1,5 +1,3 @@
-# pipeline.py
-
 import pandas as pd
 import numpy as np
 import yfinance as yf
@@ -23,10 +21,10 @@ config = {
     'dropout': 0.2
 }
 
-# Full feature list and pruned feature list
-feature_cols = ['Open','High','Low','Close','Volume','SMA14','RSI14','MACD_hist']
-pruned_feats = ['Open','High','Low','Close','Volume','MACD_hist']
-seq_len = config['seq_len']
+# Feature lists
+feature_cols = ['Open', 'High', 'Low', 'Close', 'Volume', 'SMA14', 'RSI14', 'MACD_hist']
+pruned_feats  = ['Open', 'High', 'Low', 'Close', 'Volume', 'MACD_hist']
+seq_len       = config['seq_len']
 
 # -------------------- Data Utilities --------------------
 from datetime import datetime
@@ -36,11 +34,11 @@ def fetch_history(ticker: str, start: str, end: str) -> pd.DataFrame:
         end = datetime.today().strftime('%Y-%m-%d')
     df = yf.download(ticker, start=start, end=end)
     if df.empty:
-        raise ValueError(f"No data found for {ticker} from {start} to {end}.")
+        raise ValueError(f"No data for {ticker} from {start} to {end}.")
     return df
 
 
-def fetch_new_bar(ticker):
+def fetch_new_bar(ticker: str) -> pd.DataFrame:
     df = yf.download(ticker, period="2d")
     return df.tail(1)
 
@@ -48,14 +46,12 @@ def fetch_new_bar(ticker):
 
 def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Preserve OHLCV and append SMA14, RSI14, MACD_hist onto it.
+    Preserve OHLCV and append SMA14, RSI14, MACD_hist.
     """
     df = df.copy()
-
-    # 1) 14-day Simple Moving Average
+    # SMA14
     df['SMA14'] = df['Close'].rolling(window=14, min_periods=14).mean()
-
-    # 2) 14-day RSI
+    # RSI14
     delta    = df['Close'].diff()
     gain     = delta.clip(lower=0)
     loss     = -delta.clip(upper=0)
@@ -63,72 +59,42 @@ def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     avg_loss = loss.rolling(window=14, min_periods=14).mean()
     rs       = avg_gain / avg_loss
     df['RSI14'] = 100 - (100 / (1 + rs))
-
-    # 3) MACD histogram
+    # MACD_hist
     ema12       = df['Close'].ewm(span=12, adjust=False).mean()
     ema26       = df['Close'].ewm(span=26, adjust=False).mean()
     macd_line   = ema12 - ema26
     signal_line = macd_line.ewm(span=9, adjust=False).mean()
     df['MACD_hist'] = macd_line - signal_line
-
-    # 4) Drop only the initial warm-up NaN rows
+    # Drop warm-up NaNs
     return df.dropna()
-
-
 
 # -------------------- Sequence Builder --------------------
 
-def build_sequences_cols(df: pd.DataFrame,
-                         seq_len: int,
-                         feature_cols: list,
-                         scaler: MinMaxScaler = None):
+def build_sequences(df: pd.DataFrame,
+                    seq_len: int,
+                    feature_cols: list,
+                    scaler: MinMaxScaler = None):
     """
-    Builds sliding-window sequences using only feature_cols.
-    Raises clear errors if any required column is missing or not enough data.
+    Build sliding-window sequences of length seq_len over feature_cols.
+    If scaler=None, fits a MinMaxScaler; else reuses it.
+    Returns X (n, seq_len, n_features), y (n,), scaler.
     """
-    # 1) Check required columns exist
-     feature_cols = ['Open','High','Low','Close','Volume','SMA14','RSI14','MACD_hist']
-    features = df[feature_cols]
-
-    # 2. Fit or reuse the scaler on the features
+    # 1) Drop NaNs in features
+    df_clean = df.dropna(subset=feature_cols)
+    features = df_clean[feature_cols]
+    # 2) Scale
     if scaler is None:
         scaler = MinMaxScaler()
         scaled = scaler.fit_transform(features)
     else:
         scaled = scaler.transform(features)
-
-    # 3. Slide a window of length seq_len to build X, and get y = next-day Close
+    # 3) Slide windows
     X, y = [], []
     close_idx = feature_cols.index('Close')
     for i in range(seq_len, len(scaled)):
         X.append(scaled[i-seq_len:i])
         y.append(scaled[i, close_idx])
-
-    # 4. Convert to NumPy arrays and return
-    X = np.array(X)
-    y = np.array(y)
-    return X, y, scaler
-
-# --- Now apply to your indicator-enriched DataFrame (df_ind) ---
-
-# 1️⃣ Chronological split of the enriched DataFrame into train/test
-split_idx = int(len(df_ind) * 0.8)
-train_df = df_ind.iloc[:split_idx]
-test_df  = df_ind.iloc[split_idx:]
-
-# 2️⃣ Build & scale sequences on the TRAIN set (scaler fitted here)
-seq_len = 60
-X_train, y_train, scaler = build_sequences(train_df, seq_len, scaler=None)
-
-# 3️⃣ Build sequences on the TEST set using the same scaler (no re‐fitting)
-X_test, y_test, _ = build_sequences(test_df, seq_len, scaler=scaler)
-
-# 4️⃣ Inspect shapes
-print(f"Train shapes: X={X_train.shape}, y={y_train.shape}")
-print(f"Test  shapes: X={X_test.shape}, y={y_test.shape}")
-
-
-
+    return np.array(X), np.array(y), scaler
 
 # -------------------- PyTorch Dataset --------------------
 
@@ -138,10 +104,8 @@ class SequenceDataset(Dataset):
         self.y = torch.tensor(y, dtype=torch.float32)
         if self.y.ndim == 2 and self.y.size(1) == 1:
             self.y = self.y.squeeze(1)
-
     def __len__(self):
         return len(self.X)
-
     def __getitem__(self, idx):
         return self.X[idx], self.y[idx]
 
@@ -160,6 +124,7 @@ def train_one_epoch(model, loader, loss_fn, optimizer, device):
         total_loss += loss.item() * X_batch.size(0)
     return total_loss / len(loader.dataset)
 
+
 def evaluate(model, loader, loss_fn, device):
     model.eval()
     total_loss = 0.0
@@ -174,22 +139,20 @@ def evaluate(model, loader, loss_fn, device):
 
 class GRUForecast(nn.Module):
     def __init__(self, input_size, hidden_size, num_layers, dropout):
-        super(GRUForecast, self).__init__()
+        super().__init__()
         self.gru = nn.GRU(input_size, hidden_size, num_layers,
                           batch_first=True, dropout=dropout)
         self.fc  = nn.Linear(hidden_size, 1)
-
     def forward(self, x):
         _, h_n = self.gru(x)
         return self.fc(h_n[-1]).squeeze()
 
 class LSTMForecast(nn.Module):
     def __init__(self, input_size, hidden_size, num_layers, dropout):
-        super(LSTMForecast, self).__init__()
+        super().__init__()
         self.lstm = nn.LSTM(input_size, hidden_size, num_layers,
                             batch_first=True, dropout=dropout)
         self.fc   = nn.Linear(hidden_size, 1)
-
     def forward(self, x):
         _, (h_n, _) = self.lstm(x)
         return self.fc(h_n[-1]).squeeze()
@@ -197,95 +160,73 @@ class LSTMForecast(nn.Module):
 class TCNForecast(nn.Module):
     def __init__(self, input_size, hidden_size, num_layers, dropout,
                  kernel_size=2, dilation=1):
-        super(TCNForecast, self).__init__()
-        self.conv1 = nn.Conv1d(in_channels=input_size,
-                               out_channels=hidden_size,
+        super().__init__()
+        self.conv1 = nn.Conv1d(input_size, hidden_size,
                                kernel_size=kernel_size,
                                padding=(kernel_size-1)*dilation,
                                dilation=dilation)
         self.relu    = nn.ReLU()
         self.dropout = nn.Dropout(dropout)
         self.fc      = nn.Linear(hidden_size, 1)
-
     def forward(self, x):
-        x = x.permute(0, 2, 1)
+        x = x.permute(0,2,1)
         c = self.conv1(x)
         c = self.relu(c)
         c = self.dropout(c)
-        return self.fc(c[:, :, -1]).squeeze()
+        return self.fc(c[:,:, -1]).squeeze()
+
 
 def get_model(name, input_size, config):
     if name == 'gru':
         return GRUForecast(input_size, config['hidden_size'],
                            config['num_layers'], config['dropout'])
-    elif name == 'lstm':
+    if name == 'lstm':
         return LSTMForecast(input_size, config['hidden_size'],
                              config['num_layers'], config['dropout'])
-    elif name == 'tcn':
+    if name == 'tcn':
         return TCNForecast(input_size, config['hidden_size'],
                             config['num_layers'], config['dropout'])
-    else:
-        raise ValueError(f"Unknown model name: {name}")
+    raise ValueError(f"Unknown model: {name}")
 
 # -------------------- Continual Learning --------------------
 
-# (rest of file unchanged…)
+# Globals to be initialized externally
+train_df    = None
+scaler_p    = None
+model_p     = None
+optimizer_p = None
 
-
-
-# -------------------- Continual Learning --------------------
-
-# These globals will be initialized by your script or notebook
-train_df = None        # DataFrame with enriched features
-scaler_p  = None       # Fitted MinMaxScaler on pruned_feats
-model_p   = None       # Pruned TCN model instance
-optimizer_p = None     # Optimizer for fine-tuning
-
-# Continual learning parameters
 CONTINUAL_WINDOW_DAYS = 504
 FINE_TUNE_EPOCHS     = 1
 FINE_TUNE_BATCH_SIZE = config['batch_size']
 FINE_TUNE_LR         = 1e-4
 REPLAY_BUFFER_SIZE   = 500
 
-# Replay buffer
 replay_X = None
 replay_y = None
 
-
-def fine_tune_on_new_data(new_bar_df):
-    """
-    Append the new day's indicators, update replay buffer, and fine-tune the pruned TCN.
-    new_bar_df: single-row DataFrame with OHLCV and indicator columns.
-    """
+def fine_tune_on_new_data(new_bar_df: pd.DataFrame):
     global train_df, scaler_p, model_p, optimizer_p, replay_X, replay_y
 
-    # 1) Append new day and trim window
+    # 1) Append and trim window
     train_df = pd.concat([train_df, new_bar_df]).iloc[-CONTINUAL_WINDOW_DAYS:]
 
-    # 2) Rebuild sequences for pruned features and update scaler
-    X_full, y_full, scaler_p = build_sequences_cols(
-        train_df, seq_len, pruned_feats, scaler=None)
-    # New day's latest sequence
+    # 2) Rebuild sequences (fits fresh scaler)
+    X_full, y_full, scaler_p = build_sequences(train_df, seq_len, pruned_feats, scaler=None)
     X_new = X_full[-1:].astype(np.float32)
     y_new = y_full[-1:].astype(np.float32)
 
     # 3) Update replay buffer
     if replay_X is None:
-        # initialize buffer with random subset
-        indices = np.random.choice(len(X_full),
-                                   min(REPLAY_BUFFER_SIZE, len(X_full)),
-                                   replace=False)
-        replay_X = X_full[indices]
-        replay_y = y_full[indices]
+        idx = np.random.choice(len(X_full), min(REPLAY_BUFFER_SIZE, len(X_full)), replace=False)
+        replay_X = X_full[idx]
+        replay_y = y_full[idx]
     replay_X = np.concatenate([replay_X, X_new], axis=0)[-REPLAY_BUFFER_SIZE:]
     replay_y = np.concatenate([replay_y, y_new], axis=0)[-REPLAY_BUFFER_SIZE:]
 
-    # 4) Prepare mixed batch for fine-tuning
-    mix_X = np.concatenate([X_new] * FINE_TUNE_BATCH_SIZE +
-                           [replay_X[:FINE_TUNE_BATCH_SIZE]], axis=0)
-    mix_y = np.concatenate([y_new] * FINE_TUNE_BATCH_SIZE +
-                           [replay_y[:FINE_TUNE_BATCH_SIZE]], axis=0)
+    # 4) Prepare mixed batch
+    mix_X = np.concatenate([X_new] * FINE_TUNE_BATCH_SIZE + [replay_X[:FINE_TUNE_BATCH_SIZE]], axis=0)
+    mix_y = np.concatenate([y_new] * FINE_TUNE_BATCH_SIZE + [replay_y[:FINE_TUNE_BATCH_SIZE]], axis=0)
     mix_X, mix_y = shuffle(mix_X, mix_y)
     ds = SequenceDataset(mix_X, mix_y)
     dl = DataLoader(ds, batch_size=FINE_TUNE_BATCH_SIZE, shuffle=True)
