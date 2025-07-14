@@ -35,36 +35,23 @@ seq_len = config['seq_len']
 from datetime import datetime
 
 def fetch_history(ticker: str, start: str, end: str) -> pd.DataFrame:
-    """
-    Download OHLCV for `ticker` from `start` to `end`.
-    Allows end='today' to mean the current date.
-    """
-    # Translate 'today' into an actual date string
     if isinstance(end, str) and end.lower() == 'today':
         end = datetime.today().strftime('%Y-%m-%d')
-
     df = yf.download(ticker, start=start, end=end)
     if df.empty:
         raise ValueError(f"No data found for {ticker} from {start} to {end}.")
     return df
 
-
-
 def fetch_new_bar(ticker):
-    """
-    Fetch the latest trading day bar (OHLCV) for a ticker.
-    Returns a single-row DataFrame.
-    """
     df = yf.download(ticker, period="2d")
     return df.tail(1)
-
 
 # -------------------- Feature Engineering --------------------
 
 def add_technical_indicators(df):
     """
-    Compute technical indicators (SMA14, RSI14, MACD_hist) using pandas operations
-    to ensure 1-D outputs.
+    Compute technical indicators (SMA14, RSI14, MACD_hist) and
+    append them to the original OHLCV DataFrame.
     """
     df = df.copy()
 
@@ -72,24 +59,23 @@ def add_technical_indicators(df):
     df['SMA14'] = df['Close'].rolling(window=14, min_periods=14).mean()
 
     # 2) 14-day RSI
-    delta = df['Close'].diff()
-    gain  = delta.clip(lower=0)
-    loss  = -delta.clip(upper=0)
+    delta    = df['Close'].diff()
+    gain     = delta.clip(lower=0)
+    loss     = -delta.clip(upper=0)
     avg_gain = gain.rolling(window=14, min_periods=14).mean()
     avg_loss = loss.rolling(window=14, min_periods=14).mean()
-    rs = avg_gain / avg_loss
+    rs       = avg_gain / avg_loss
     df['RSI14'] = 100 - (100 / (1 + rs))
 
-    # 3) MACD histogram (12-day EMA minus 26-day EMA, then signal line)
-    ema12 = df['Close'].ewm(span=12, adjust=False).mean()
-    ema26 = df['Close'].ewm(span=26, adjust=False).mean()
-    macd_line   = ema12 - ema26
-    signal_line = macd_line.ewm(span=9, adjust=False).mean()
+    # 3) MACD histogram
+    ema12        = df['Close'].ewm(span=12, adjust=False).mean()
+    ema26        = df['Close'].ewm(span=26, adjust=False).mean()
+    macd_line    = ema12 - ema26
+    signal_line  = macd_line.ewm(span=9, adjust=False).mean()
     df['MACD_hist'] = macd_line - signal_line
 
-    # 4) Drop warm-up NaN rows
+    # 4) Drop warm-up NaNs
     return df.dropna()
-
 
 # -------------------- Sequence Builder --------------------
 
@@ -97,30 +83,35 @@ def build_sequences_cols(df, seq_len, feature_cols, scaler=None):
     """
     Builds sliding-window sequences from df using only the specified feature_cols.
     Drops rows with NaNs in those columns before scaling.
-    Raises a clear error if there isn't enough data to build at least one sequence.
+    Raises clear errors if required columns are missing or there's not enough data.
     """
     # 1) Only use columns that actually exist
     present_feats = [c for c in feature_cols if c in df.columns]
     if 'Close' not in present_feats:
         raise ValueError("`Close` column is required for sequence targets.")
 
-    # 2) Drop NaNs in those columns
+    # 2) Ensure all required features are present
+    missing = set(feature_cols) - set(df.columns)
+    if missing:
+        raise ValueError(f"build_sequences_cols: missing columns in DataFrame: {missing}")
+
+    # 3) Drop rows with NaNs in those columns
     df_clean = df.dropna(subset=present_feats)
     feats    = df_clean[present_feats]
 
-    # 3) Must have at least seq_len+1 rows to form one (X,y)
+    # 4) Must have at least seq_len+1 rows to form one (X,y)
     if feats.shape[0] <= seq_len:
         raise ValueError(
             f"Not enough data to build sequences: "
             f"need >{seq_len} rows after dropna, but got {feats.shape[0]}."
         )
 
-    # 4) Fit or reuse scaler
+    # 5) Fit or reuse scaler
     if scaler is None:
         scaler = MinMaxScaler().fit(feats)
     scaled = scaler.transform(feats)
 
-    # 5) Slide windows
+    # 6) Slide windows
     X, y = [], []
     close_idx = present_feats.index('Close')
     for i in range(seq_len, scaled.shape[0]):
@@ -129,14 +120,9 @@ def build_sequences_cols(df, seq_len, feature_cols, scaler=None):
 
     return np.array(X), np.array(y), scaler
 
-
 # -------------------- PyTorch Dataset --------------------
 
 class SequenceDataset(Dataset):
-    """
-    PyTorch Dataset for sliding-window sequences.
-    Automatically squeezes target y to shape (batch,).
-    """
     def __init__(self, X, y):
         self.X = torch.tensor(X, dtype=torch.float32)
         self.y = torch.tensor(y, dtype=torch.float32)
@@ -148,7 +134,6 @@ class SequenceDataset(Dataset):
 
     def __getitem__(self, idx):
         return self.X[idx], self.y[idx]
-
 
 # -------------------- Training & Evaluation --------------------
 
@@ -165,7 +150,6 @@ def train_one_epoch(model, loader, loss_fn, optimizer, device):
         total_loss += loss.item() * X_batch.size(0)
     return total_loss / len(loader.dataset)
 
-
 def evaluate(model, loader, loss_fn, device):
     model.eval()
     total_loss = 0.0
@@ -175,7 +159,6 @@ def evaluate(model, loader, loss_fn, device):
             preds = model(X_batch)
             total_loss += loss_fn(preds, y_batch).item() * X_batch.size(0)
     return total_loss / len(loader.dataset)
-
 
 # -------------------- Model Definitions --------------------
 
@@ -188,9 +171,7 @@ class GRUForecast(nn.Module):
 
     def forward(self, x):
         _, h_n = self.gru(x)
-        out = self.fc(h_n[-1])
-        return out.squeeze()
-
+        return self.fc(h_n[-1]).squeeze()
 
 class LSTMForecast(nn.Module):
     def __init__(self, input_size, hidden_size, num_layers, dropout):
@@ -201,9 +182,7 @@ class LSTMForecast(nn.Module):
 
     def forward(self, x):
         _, (h_n, _) = self.lstm(x)
-        out = self.fc(h_n[-1])
-        return out.squeeze()
-
+        return self.fc(h_n[-1]).squeeze()
 
 class TCNForecast(nn.Module):
     def __init__(self, input_size, hidden_size, num_layers, dropout,
@@ -219,33 +198,29 @@ class TCNForecast(nn.Module):
         self.fc      = nn.Linear(hidden_size, 1)
 
     def forward(self, x):
-        # x: (batch, seq_len, features) -> (batch, features, seq_len)
         x = x.permute(0, 2, 1)
         c = self.conv1(x)
         c = self.relu(c)
         c = self.dropout(c)
-        out = c[:, :, -1]
-        return self.fc(out).squeeze()
-
+        return self.fc(c[:, :, -1]).squeeze()
 
 def get_model(name, input_size, config):
     if name == 'gru':
-        return GRUForecast(input_size,
-                           config['hidden_size'],
-                           config['num_layers'],
-                           config['dropout'])
+        return GRUForecast(input_size, config['hidden_size'],
+                           config['num_layers'], config['dropout'])
     elif name == 'lstm':
-        return LSTMForecast(input_size,
-                            config['hidden_size'],
-                            config['num_layers'],
-                            config['dropout'])
+        return LSTMForecast(input_size, config['hidden_size'],
+                             config['num_layers'], config['dropout'])
     elif name == 'tcn':
-        return TCNForecast(input_size,
-                           config['hidden_size'],
-                           config['num_layers'],
-                           config['dropout'])
+        return TCNForecast(input_size, config['hidden_size'],
+                            config['num_layers'], config['dropout'])
     else:
         raise ValueError(f"Unknown model name: {name}")
+
+# -------------------- Continual Learning --------------------
+
+# (rest of file unchanged…)
+
 
 
 # -------------------- Continual Learning --------------------
