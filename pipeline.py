@@ -3,8 +3,6 @@
 import pandas as pd
 import numpy as np
 import yfinance as yf
-from ta.trend import SMAIndicator, MACD
-from ta.momentum import RSIIndicator
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.utils import shuffle
 import torch
@@ -31,7 +29,6 @@ pruned_feats = ['Open','High','Low','Close','Volume','MACD_hist']
 seq_len = config['seq_len']
 
 # -------------------- Data Utilities --------------------
-
 from datetime import datetime
 
 def fetch_history(ticker: str, start: str, end: str) -> pd.DataFrame:
@@ -42,16 +39,16 @@ def fetch_history(ticker: str, start: str, end: str) -> pd.DataFrame:
         raise ValueError(f"No data found for {ticker} from {start} to {end}.")
     return df
 
+
 def fetch_new_bar(ticker):
     df = yf.download(ticker, period="2d")
     return df.tail(1)
 
 # -------------------- Feature Engineering --------------------
 
-def add_technical_indicators(df):
+def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Compute technical indicators (SMA14, RSI14, MACD_hist) and
-    append them to the original OHLCV DataFrame.
+    Preserve OHLCV and append SMA14, RSI14, MACD_hist to the DataFrame.
     """
     df = df.copy()
 
@@ -74,46 +71,42 @@ def add_technical_indicators(df):
     signal_line  = macd_line.ewm(span=9, adjust=False).mean()
     df['MACD_hist'] = macd_line - signal_line
 
-    # 4) Drop warm-up NaNs
+    # 4) Drop warm-up NaN rows (first 14 days)
     return df.dropna()
 
 # -------------------- Sequence Builder --------------------
 
-def build_sequences_cols(df, seq_len, feature_cols, scaler=None):
+def build_sequences_cols(df: pd.DataFrame,
+                         seq_len: int,
+                         feature_cols: list,
+                         scaler: MinMaxScaler = None):
     """
-    Builds sliding-window sequences from df using only the specified feature_cols.
-    Drops rows with NaNs in those columns before scaling.
-    Raises clear errors if required columns are missing or there's not enough data.
+    Builds sliding-window sequences using only feature_cols.
+    Raises clear errors if any required column is missing or not enough data.
     """
-    # 1) Only use columns that actually exist
-    present_feats = [c for c in feature_cols if c in df.columns]
-    if 'Close' not in present_feats:
-        raise ValueError("`Close` column is required for sequence targets.")
-
-    # 2) Ensure all required features are present
+    # 1) Check required columns exist
     missing = set(feature_cols) - set(df.columns)
     if missing:
         raise ValueError(f"build_sequences_cols: missing columns in DataFrame: {missing}")
 
-    # 3) Drop rows with NaNs in those columns
-    df_clean = df.dropna(subset=present_feats)
-    feats    = df_clean[present_feats]
+    # 2) Drop rows with NaNs in these columns
+    df_clean = df.dropna(subset=feature_cols)
+    feats    = df_clean[feature_cols]
 
-    # 4) Must have at least seq_len+1 rows to form one (X,y)
+    # 3) Enough rows?
     if feats.shape[0] <= seq_len:
         raise ValueError(
-            f"Not enough data to build sequences: "
-            f"need >{seq_len} rows after dropna, but got {feats.shape[0]}."
+            f"Not enough data to build sequences: need >{seq_len} rows, got {feats.shape[0]}."
         )
 
-    # 5) Fit or reuse scaler
+    # 4) Scale
     if scaler is None:
         scaler = MinMaxScaler().fit(feats)
     scaled = scaler.transform(feats)
 
-    # 6) Slide windows
+    # 5) Slide windows
     X, y = [], []
-    close_idx = present_feats.index('Close')
+    close_idx = feature_cols.index('Close')
     for i in range(seq_len, scaled.shape[0]):
         X.append(scaled[i-seq_len:i])
         y.append(scaled[i, close_idx])
