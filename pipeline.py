@@ -50,36 +50,33 @@ def fetch_new_bar(ticker: str) -> pd.DataFrame:
 # -------------------- Feature Engineering --------------------
 def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Returns a DataFrame with original OHLCV plus SMA14, RSI14, MACD_hist.
-    Only drops rows missing the new indicators.
+    Preserve the original OHLCV, append SMA14, RSI14, MACD_hist,
+    and drop only the rows where those new indicators are NaN.
     """
-    # Compute indicators
-    sma14 = df['Close'].rolling(window=14, min_periods=14).mean()
+    df = df.copy()
 
-    delta = df['Close'].diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
+    # 1) 14-day SMA (as a Series)
+    df['SMA14'] = df['Close'].rolling(window=14, min_periods=14).mean()
+
+    # 2) 14-day RSI
+    delta    = df['Close'].diff()
+    gain     = delta.clip(lower=0)
+    loss     = -delta.clip(upper=0)
     avg_gain = gain.rolling(window=14, min_periods=14).mean()
     avg_loss = loss.rolling(window=14, min_periods=14).mean()
-    rs = avg_gain / avg_loss
-    rsi14 = 100 - (100 / (1 + rs))
+    rs       = avg_gain / avg_loss
+    df['RSI14'] = 100 - (100 / (1 + rs))
 
-    ema12 = df['Close'].ewm(span=12, adjust=False).mean()
-    ema26 = df['Close'].ewm(span=26, adjust=False).mean()
-    macd_line = ema12 - ema26
-    signal = macd_line.ewm(span=9, adjust=False).mean()
-    macd_hist = macd_line - signal
+    # 3) MACD histogram
+    ema12       = df['Close'].ewm(span=12, adjust=False).mean()
+    ema26       = df['Close'].ewm(span=26, adjust=False).mean()
+    macd_line   = ema12 - ema26
+    signal_line = macd_line.ewm(span=9, adjust=False).mean()
+    df['MACD_hist'] = macd_line - signal_line
 
-    # Join indicators with original
-    indicators = pd.DataFrame({
-        'SMA14': sma14,
-        'RSI14': rsi14,
-        'MACD_hist': macd_hist
-    }, index=df.index)
-    df_out = df.join(indicators)
+    # 4) Now drop only the indicator NaNs (first ~26 rows)
+    return df.dropna(subset=['SMA14', 'RSI14', 'MACD_hist'])
 
-    # Drop only rows missing the new indicators
-    return df_out.dropna(subset=['SMA14', 'RSI14', 'MACD_hist'])
 
 # -------------------- Sequence Builder --------------------
 def build_sequences_cols(
