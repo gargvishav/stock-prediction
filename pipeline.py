@@ -87,31 +87,28 @@ def add_technical_indicators(df):
 def build_sequences_cols(df, seq_len, feature_cols, scaler=None):
     """
     Builds sliding-window sequences from df using only the specified feature_cols.
-    Drops any rows with NaNs in the present feature columns before fitting or transforming the scaler.
+    Drops any rows with NaNs in the present feature columns before scaling.
     Returns:
       X: np.array of shape (n_samples, seq_len, n_features)
       y: np.array of shape (n_samples,)
       scaler: fitted MinMaxScaler
     """
-    # 1) Determine which requested features actually exist in df
+    # 1) Determine which features are actually in df
     present_feats = [c for c in feature_cols if c in df.columns]
-    missing = set(feature_cols) - set(present_feats)
-    if missing:
-        print(f"Warning: missing features {missing}. Using only {present_feats}.")
+    if not present_feats:
+        raise ValueError(f"None of the feature_cols {feature_cols} are in the DataFrame")
 
-    # 2) Drop rows where any present feature is NaN
+    # 2) Drop rows where any of the present features are NaN
     df_clean = df.dropna(subset=present_feats)
-    feats = df_clean[present_feats]
+    feats    = df_clean[present_feats]
 
-    # 3) Fit or reuse the scaler
+    # 3) Fit or reuse the scaler on the clean features
     if scaler is None:
         scaler = MinMaxScaler().fit(feats)
     scaled = scaler.transform(feats)
 
-    # 4) Slide a window of length seq_len to build X and y (next-day Close)
+    # 4) Build sequences
     X, y = [], []
-    if 'Close' not in present_feats:
-        raise KeyError("Cannot build sequences because 'Close' column is missing after filtering features.")
     close_idx = present_feats.index('Close')
     for i in range(seq_len, scaled.shape[0]):
         X.append(scaled[i-seq_len:i])
