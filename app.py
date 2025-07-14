@@ -4,13 +4,15 @@ import streamlit as st
 import pandas as pd
 import torch
 import numpy as np
-from your_pipeline import (
+from pipeline import (
+    fetch_history,
     add_technical_indicators, 
     build_sequences_cols, 
     TCNForecast, 
     scaler_p, 
     pruned_feats, 
-    seq_len
+    seq_len,
+    config
 )
 
 st.title("📈 Stock Forecast with Pruned TCN")
