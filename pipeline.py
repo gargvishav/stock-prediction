@@ -51,7 +51,8 @@ def fetch_new_bar(ticker: str) -> pd.DataFrame:
 def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """
     Compute and append SMA14, RSI14, MACD_hist to the original OHLCV DataFrame.
-    Drops all rows that still have NaNs (warm-up period).
+    Returns the DataFrame with indicator columns; dropping of warm-up rows
+    will be handled in the sequence builder.
     """
     df = df.copy()
 
@@ -74,8 +75,8 @@ def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     signal_line = macd_line.ewm(span=9, adjust=False).mean()
     df['MACD_hist'] = macd_line - signal_line
 
-    # 4) Drop all rows that still have NaNs (warm-up period)
-    return df.dropna()
+    # Return full DataFrame; dropna will occur in build_sequences_cols
+    return df
 
 # -------------------- Sequence Builder --------------------
 def build_sequences_cols(
