@@ -70,7 +70,7 @@ def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 # -------------------- Sequence Builder --------------------
 
-def build_sequences(df: pd.DataFrame,
+def build_sequences_cols(df: pd.DataFrame,
                     seq_len: int,
                     feature_cols: list,
                     scaler: MinMaxScaler = None):
