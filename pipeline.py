@@ -48,7 +48,7 @@ def fetch_new_bar(ticker):
 
 def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Preserve OHLCV and append SMA14, RSI14, MACD_hist to the DataFrame.
+    Preserve OHLCV and append SMA14, RSI14, MACD_hist onto it.
     """
     df = df.copy()
 
@@ -65,14 +65,15 @@ def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     df['RSI14'] = 100 - (100 / (1 + rs))
 
     # 3) MACD histogram
-    ema12        = df['Close'].ewm(span=12, adjust=False).mean()
-    ema26        = df['Close'].ewm(span=26, adjust=False).mean()
-    macd_line    = ema12 - ema26
-    signal_line  = macd_line.ewm(span=9, adjust=False).mean()
+    ema12       = df['Close'].ewm(span=12, adjust=False).mean()
+    ema26       = df['Close'].ewm(span=26, adjust=False).mean()
+    macd_line   = ema12 - ema26
+    signal_line = macd_line.ewm(span=9, adjust=False).mean()
     df['MACD_hist'] = macd_line - signal_line
 
-    # 4) Drop warm-up NaN rows (first 14 days)
+    # 4) Drop only the initial warm-up NaN rows
     return df.dropna()
+
 
 # -------------------- Sequence Builder --------------------
 
