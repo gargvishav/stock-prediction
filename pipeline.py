@@ -50,28 +50,32 @@ def fetch_new_bar(ticker: str) -> pd.DataFrame:
 # -------------------- Feature Engineering --------------------
 def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Returns the original OHLCV DataFrame with SMA14, RSI14, and MACD_hist appended.
-    Drops only the rows where the new indicators are NaN.
+    Compute and append SMA14, RSI14, MACD_hist to the original OHLCV DataFrame.
+    Drops all rows that still have NaNs (warm-up period).
     """
     df = df.copy()
-    # 1) 14-day SMA
+
+    # 1) 14-day Simple Moving Average
     df['SMA14'] = df['Close'].rolling(window=14, min_periods=14).mean()
+
     # 2) 14-day RSI
     delta = df['Close'].diff()
-    gain = delta.clip(lower=0)
-    loss = -delta.clip(upper=0)
+    gain  = delta.clip(lower=0)
+    loss  = -delta.clip(upper=0)
     avg_gain = gain.rolling(window=14, min_periods=14).mean()
     avg_loss = loss.rolling(window=14, min_periods=14).mean()
     rs = avg_gain / avg_loss
     df['RSI14'] = 100 - (100 / (1 + rs))
-    # 3) MACD histogram
+
+    # 3) MACD histogram (12-day EMA minus 26-day EMA, then signal line)
     ema12 = df['Close'].ewm(span=12, adjust=False).mean()
     ema26 = df['Close'].ewm(span=26, adjust=False).mean()
     macd_line = ema12 - ema26
     signal_line = macd_line.ewm(span=9, adjust=False).mean()
     df['MACD_hist'] = macd_line - signal_line
-    # 4) Drop rows missing new indicators
-    return df.dropna(subset=['SMA14', 'RSI14', 'MACD_hist'])
+
+    # 4) Drop all rows that still have NaNs (warm-up period)
+    return df.dropna()
 
 # -------------------- Sequence Builder --------------------
 def build_sequences_cols(
