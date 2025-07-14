@@ -50,33 +50,28 @@ def fetch_new_bar(ticker: str) -> pd.DataFrame:
 # -------------------- Feature Engineering --------------------
 def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Preserve the original OHLCV, append SMA14, RSI14, MACD_hist,
-    and drop only the rows where those new indicators are NaN.
+    Returns the original OHLCV DataFrame with SMA14, RSI14, and MACD_hist appended.
+    Drops only the rows where the new indicators are NaN.
     """
     df = df.copy()
-
-    # 1) 14-day SMA (as a Series)
+    # 1) 14-day SMA
     df['SMA14'] = df['Close'].rolling(window=14, min_periods=14).mean()
-
     # 2) 14-day RSI
-    delta    = df['Close'].diff()
-    gain     = delta.clip(lower=0)
-    loss     = -delta.clip(upper=0)
+    delta = df['Close'].diff()
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
     avg_gain = gain.rolling(window=14, min_periods=14).mean()
     avg_loss = loss.rolling(window=14, min_periods=14).mean()
-    rs       = avg_gain / avg_loss
+    rs = avg_gain / avg_loss
     df['RSI14'] = 100 - (100 / (1 + rs))
-
     # 3) MACD histogram
-    ema12       = df['Close'].ewm(span=12, adjust=False).mean()
-    ema26       = df['Close'].ewm(span=26, adjust=False).mean()
-    macd_line   = ema12 - ema26
+    ema12 = df['Close'].ewm(span=12, adjust=False).mean()
+    ema26 = df['Close'].ewm(span=26, adjust=False).mean()
+    macd_line = ema12 - ema26
     signal_line = macd_line.ewm(span=9, adjust=False).mean()
     df['MACD_hist'] = macd_line - signal_line
-
-    # 4) Now drop only the indicator NaNs (first ~26 rows)
+    # 4) Drop rows missing new indicators
     return df.dropna(subset=['SMA14', 'RSI14', 'MACD_hist'])
-
 
 # -------------------- Sequence Builder --------------------
 def build_sequences_cols(
@@ -94,29 +89,24 @@ def build_sequences_cols(
     missing = set(feature_cols) - set(df.columns)
     if missing:
         raise ValueError(f"build_sequences_cols: missing columns: {missing}")
-
     # 2) Drop rows with NaNs in those features
     df_clean = df.dropna(subset=feature_cols)
     feats = df_clean[feature_cols]
-
     # 3) Check length
     if feats.shape[0] <= seq_len:
         raise ValueError(
             f"Not enough data: need >{seq_len} rows after dropna, got {feats.shape[0]}."
         )
-
     # 4) Scale
     if scaler is None:
         scaler = MinMaxScaler().fit(feats)
     scaled = scaler.transform(feats)
-
     # 5) Slide windows
     X, y = [], []
     close_idx = feature_cols.index('Close')
     for i in range(seq_len, scaled.shape[0]):
         X.append(scaled[i-seq_len:i])
         y.append(scaled[i, close_idx])
-
     return np.array(X), np.array(y), scaler
 
 # -------------------- PyTorch Dataset --------------------
@@ -126,10 +116,8 @@ class SequenceDataset(Dataset):
         self.y = torch.tensor(y, dtype=torch.float32)
         if self.y.ndim == 2 and self.y.size(1) == 1:
             self.y = self.y.squeeze(1)
-
     def __len__(self):
         return len(self.X)
-
     def __getitem__(self, idx):
         return self.X[idx], self.y[idx]
 
@@ -146,7 +134,6 @@ def train_one_epoch(model, loader, loss_fn, optimizer, device):
         optimizer.step()
         total_loss += loss.item() * X_batch.size(0)
     return total_loss / len(loader.dataset)
-
 
 def evaluate(model, loader, loss_fn, optimizer, device):
     model.eval()
@@ -170,7 +157,6 @@ class GRUForecast(nn.Module):
             dropout=dropout
         )
         self.fc = nn.Linear(hidden_size, 1)
-
     def forward(self, x):
         _, h_n = self.gru(x)
         return self.fc(h_n[-1]).squeeze()
@@ -186,7 +172,6 @@ class LSTMForecast(nn.Module):
             dropout=dropout
         )
         self.fc = nn.Linear(hidden_size, 1)
-
     def forward(self, x):
         _, (h_n, _) = self.lstm(x)
         return self.fc(h_n[-1]).squeeze()
@@ -195,17 +180,14 @@ class TCNForecast(nn.Module):
     def __init__(self, input_size, hidden_size, num_layers, dropout,
                  kernel_size=2, dilation=1):
         super().__init__()
-        self.conv1 = nn.Conv1d(
-            in_channels=input_size,
-            out_channels=hidden_size,
-            kernel_size=kernel_size,
-            padding=(kernel_size-1)*dilation,
-            dilation=dilation
-        )
+        self.conv1 = nn.Conv1d(in_channels=input_size,
+                               out_channels=hidden_size,
+                               kernel_size=kernel_size,
+                               padding=(kernel_size-1)*dilation,
+                               dilation=dilation)
         self.relu = nn.ReLU()
         self.dropout = nn.Dropout(dropout)
         self.fc = nn.Linear(hidden_size, 1)
-
     def forward(self, x):
         x = x.permute(0, 2, 1)
         c = self.conv1(x)
