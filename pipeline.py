@@ -98,9 +98,13 @@ def build_sequences_cols(df, seq_len, feature_cols, scaler=None):
     if not present_feats:
         raise ValueError(f"None of the feature_cols {feature_cols} are in the DataFrame")
 
-    # 2) Drop rows where any of the present features are NaN
-    df_clean = df.dropna(subset=present_feats)
-    feats    = df_clean[present_feats]
+    # 2) Attempt to drop rows where any of the present features are NaN
+    try:
+        df_clean = df.dropna(subset=present_feats)
+    except KeyError:
+        # If dropna subset fails, fall back to original df
+        df_clean = df.copy()
+    feats = df_clean[present_feats]
 
     # 3) Fit or reuse the scaler on the clean features
     if scaler is None:
@@ -115,7 +119,6 @@ def build_sequences_cols(df, seq_len, feature_cols, scaler=None):
         y.append(scaled[i, close_idx])
 
     return np.array(X), np.array(y), scaler
-
 
 # -------------------- PyTorch Dataset --------------------
 
