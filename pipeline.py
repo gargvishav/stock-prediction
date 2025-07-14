@@ -50,34 +50,42 @@ def fetch_new_bar(ticker: str) -> pd.DataFrame:
 # -------------------- Feature Engineering --------------------
 def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Preserve OHLCV columns and append SMA14, RSI14, MACD_hist indicators.
-    Drops initial warm-up NaNs.
+    Returns a DataFrame with original OHLCV plus SMA14, RSI14, MACD_hist.
+    Only drops rows missing the new indicators.
     """
-    df = df.copy()
-    # 1) 14-day SMA
-    df['SMA14'] = df['Close'].rolling(window=14, min_periods=14).mean()
-    # 2) 14-day RSI
-    delta    = df['Close'].diff()
-    gain     = delta.clip(lower=0)
-    loss     = -delta.clip(upper=0)
+    # Compute indicators
+    sma14 = df['Close'].rolling(window=14, min_periods=14).mean()
+
+    delta = df['Close'].diff()
+    gain  = delta.clip(lower=0)
+    loss  = -delta.clip(upper=0)
     avg_gain = gain.rolling(window=14, min_periods=14).mean()
     avg_loss = loss.rolling(window=14, min_periods=14).mean()
-    rs       = avg_gain / avg_loss
-    df['RSI14'] = 100 - (100 / (1 + rs))
-    # 3) MACD histogram
-    ema12       = df['Close'].ewm(span=12, adjust=False).mean()
-    ema26       = df['Close'].ewm(span=26, adjust=False).mean()
-    macd_line   = ema12 - ema26
-    signal_line = macd_line.ewm(span=9, adjust=False).mean()
-    df['MACD_hist'] = macd_line - signal_line
-    # 4) Drop warm-up NaNs
-    return df.dropna()
+    rs    = avg_gain / avg_loss
+    rsi14 = 100 - (100 / (1 + rs))
+
+    ema12      = df['Close'].ewm(span=12, adjust=False).mean()
+    ema26      = df['Close'].ewm(span=26, adjust=False).mean()
+    macd_line  = ema12 - ema26
+    signal     = macd_line.ewm(span=9, adjust=False).mean()
+    macd_hist  = macd_line - signal
+
+    # Join indicators with original
+    indicators = pd.DataFrame({
+        'SMA14': sma14,
+        'RSI14': rsi14,
+        'MACD_hist': macd_hist
+    }, index=df.index)
+    df_out = df.join(indicators)
+
+    # Drop only rows missing the new indicators
+    return df_out.dropna(subset=['SMA14', 'RSI14', 'MACD_hist'])
 
 # -------------------- Sequence Builder --------------------
-def build_sequences(df: pd.DataFrame,
-                    seq_len: int,
-                    feature_cols: list,
-                    scaler: MinMaxScaler = None):
+def build_sequences_cols(df: pd.DataFrame,
+                         seq_len: int,
+                         feature_cols: list,
+                         scaler: MinMaxScaler = None):
     """
     Build sliding-window sequences (X,y) of length seq_len over feature_cols.
     Fits a MinMaxScaler on train; reuses if provided.
@@ -86,29 +94,31 @@ def build_sequences(df: pd.DataFrame,
     # 1) Ensure all required columns exist
     missing = set(feature_cols) - set(df.columns)
     if missing:
-        raise ValueError(f"build_sequences: missing columns: {missing}")
+        raise ValueError(f"build_sequences_cols: missing columns: {missing}")
+
     # 2) Drop rows with NaNs in those features
     df_clean = df.dropna(subset=feature_cols)
     feats    = df_clean[feature_cols]
+
     # 3) Check length
     if feats.shape[0] <= seq_len:
         raise ValueError(
             f"Not enough data: need >{seq_len} rows after dropna, got {feats.shape[0]}."
         )
+
     # 4) Scale
     if scaler is None:
         scaler = MinMaxScaler().fit(feats)
     scaled = scaler.transform(feats)
+
     # 5) Slide windows
     X, y = [], []
     close_idx = feature_cols.index('Close')
     for i in range(seq_len, scaled.shape[0]):
         X.append(scaled[i-seq_len:i])
         y.append(scaled[i, close_idx])
-    return np.array(X), np.array(y), scaler
 
-# Alias for backward compatibility
-build_sequences_cols = build_sequences
+    return np.array(X), np.array(y), scaler
 
 # -------------------- PyTorch Dataset --------------------
 class SequenceDataset(Dataset):
@@ -136,7 +146,7 @@ def train_one_epoch(model, loader, loss_fn, optimizer, device):
         total_loss += loss.item() * X_batch.size(0)
     return total_loss / len(loader.dataset)
 
-def evaluate(model, loader, loss_fn, device):
+ def evaluate(model, loader, loss_fn, device):
     model.eval()
     total_loss = 0.0
     with torch.no_grad():
@@ -183,9 +193,9 @@ class TCNForecast(nn.Module):
         c = self.conv1(x)
         c = self.relu(c)
         c = self.dropout(c)
-        return self.fc(c[:,:, -1]).squeeze()
+        return self.fc(c[:, :, -1]).squeeze()
 
-def get_model(name, input_size, config):
+ def get_model(name, input_size, config):
     if name == 'gru':
         return GRUForecast(input_size, config['hidden_size'], config['num_layers'], config['dropout'])
     if name == 'lstm':
