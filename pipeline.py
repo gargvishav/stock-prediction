@@ -46,33 +46,45 @@ def fetch_new_bar(ticker):
 
 # -------------------- Feature Engineering --------------------
 
-def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
+def build_sequences_cols(df: pd.DataFrame,
+                         seq_len: int,
+                         feature_cols: list,
+                         scaler: MinMaxScaler = None):
     """
-    Preserve OHLCV and append SMA14, RSI14, MACD_hist onto it.
+    Builds sliding-window (X,y) sequences from `df` using exactly the
+    columns in `feature_cols`. Raises a clear error if any are missing
+    or if there isn’t enough data.
     """
-    df = df.copy()
+    # 1) Fail fast if any required column is gone
+    missing = set(feature_cols) - set(df.columns)
+    if missing:
+        raise ValueError(f"build_sequences_cols: missing columns in DataFrame: {missing}")
 
-    # 1) 14-day Simple Moving Average
-    df['SMA14'] = df['Close'].rolling(window=14, min_periods=14).mean()
+    # 2) Drop any rows with NaNs in those columns
+    df_clean = df.dropna(subset=feature_cols)
+    feats    = df_clean[feature_cols]
 
-    # 2) 14-day RSI
-    delta    = df['Close'].diff()
-    gain     = delta.clip(lower=0)
-    loss     = -delta.clip(upper=0)
-    avg_gain = gain.rolling(window=14, min_periods=14).mean()
-    avg_loss = loss.rolling(window=14, min_periods=14).mean()
-    rs       = avg_gain / avg_loss
-    df['RSI14'] = 100 - (100 / (1 + rs))
+    # 3) Make sure we have > seq_len rows to form at least one (X,y)
+    if feats.shape[0] <= seq_len:
+        raise ValueError(
+            f"Not enough data to build sequences: need >{seq_len} rows after dropna, "
+            f"but got {feats.shape[0]}."
+        )
 
-    # 3) MACD histogram
-    ema12       = df['Close'].ewm(span=12, adjust=False).mean()
-    ema26       = df['Close'].ewm(span=26, adjust=False).mean()
-    macd_line   = ema12 - ema26
-    signal_line = macd_line.ewm(span=9, adjust=False).mean()
-    df['MACD_hist'] = macd_line - signal_line
+    # 4) Fit or reuse the scaler
+    if scaler is None:
+        scaler = MinMaxScaler().fit(feats)
+    scaled = scaler.transform(feats)
 
-    # 4) Drop only the initial warm-up NaN rows
-    return df.dropna()
+    # 5) Slide windows
+    X, y = [], []
+    close_idx = feature_cols.index('Close')
+    for i in range(seq_len, scaled.shape[0]):
+        X.append(scaled[i-seq_len:i])
+        y.append(scaled[i, close_idx])
+
+    return np.array(X), np.array(y), scaler
+
 
 
 # -------------------- Sequence Builder --------------------
