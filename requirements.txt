@@ -1,0 +1,8 @@
+pandas
+numpy
+yfinance
+ta
+scikit-learn
+torch
+streamlit
+schedule
