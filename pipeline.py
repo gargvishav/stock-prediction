@@ -54,17 +54,31 @@ def fetch_new_bar(ticker):
 
 def add_technical_indicators(df):
     """
-    Add SMA14, RSI14, and MACD histogram to OHLCV DataFrame.
-    Drops initial rows with NaNs after calculation.
+    Compute technical indicators (SMA14, RSI14, MACD_hist) using pandas operations
+    to ensure 1-D outputs.
     """
     df = df.copy()
-    # 14-day Simple Moving Average
-    df['SMA14'] = SMAIndicator(close=df['Close'], window=14).sma_indicator()
-    # 14-day RSI
-    df['RSI14'] = RSIIndicator(close=df['Close'], window=14).rsi()
-    # MACD histogram
-    macd = MACD(close=df['Close'])
-    df['MACD_hist'] = macd.macd_diff()
+
+    # 1) 14-day Simple Moving Average
+    df['SMA14'] = df['Close'].rolling(window=14, min_periods=14).mean()
+
+    # 2) 14-day RSI
+    delta = df['Close'].diff()
+    gain  = delta.clip(lower=0)
+    loss  = -delta.clip(upper=0)
+    avg_gain = gain.rolling(window=14, min_periods=14).mean()
+    avg_loss = loss.rolling(window=14, min_periods=14).mean()
+    rs = avg_gain / avg_loss
+    df['RSI14'] = 100 - (100 / (1 + rs))
+
+    # 3) MACD histogram (12-day EMA minus 26-day EMA, then signal line)
+    ema12 = df['Close'].ewm(span=12, adjust=False).mean()
+    ema26 = df['Close'].ewm(span=26, adjust=False).mean()
+    macd_line   = ema12 - ema26
+    signal_line = macd_line.ewm(span=9, adjust=False).mean()
+    df['MACD_hist'] = macd_line - signal_line
+
+    # 4) Drop warm-up NaN rows
     return df.dropna()
 
 
