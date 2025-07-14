@@ -54,31 +54,17 @@ def fetch_new_bar(ticker):
 
 def add_technical_indicators(df):
     """
-    Compute SMA14, RSI14, and MACD_hist using pandas only,
-    guaranteeing 1D outputs that pandas will accept.
+    Add SMA14, RSI14, and MACD histogram to OHLCV DataFrame.
+    Drops initial rows with NaNs after calculation.
     """
     df = df.copy()
-
-    # 1) 14-day Simple Moving Average
-    df['SMA14'] = df['Close'].rolling(window=14, min_periods=14).mean()
-
-    # 2) 14-day RSI
-    delta = df['Close'].diff()
-    gain  = delta.clip(lower=0)
-    loss  = -delta.clip(upper=0)
-    avg_gain = gain.rolling(window=14, min_periods=14).mean()
-    avg_loss = loss.rolling(window=14, min_periods=14).mean()
-    rs = avg_gain / avg_loss
-    df['RSI14'] = 100 - (100 / (1 + rs))
-
-    # 3) MACD histogram (12- and 26-day EMA, then signal line)
-    ema12 = df['Close'].ewm(span=12, adjust=False).mean()
-    ema26 = df['Close'].ewm(span=26, adjust=False).mean()
-    macd_line   = ema12 - ema26
-    signal_line = macd_line.ewm(span=9, adjust=False).mean()
-    df['MACD_hist'] = macd_line - signal_line
-
-    # 4) Drop the warm-up rows that contain NaNs
+    # 14-day Simple Moving Average
+    df['SMA14'] = SMAIndicator(close=df['Close'], window=14).sma_indicator()
+    # 14-day RSI
+    df['RSI14'] = RSIIndicator(close=df['Close'], window=14).rsi()
+    # MACD histogram
+    macd = MACD(close=df['Close'])
+    df['MACD_hist'] = macd.macd_diff()
     return df.dropna()
 
 
@@ -87,30 +73,37 @@ def add_technical_indicators(df):
 def build_sequences_cols(df, seq_len, feature_cols, scaler=None):
     """
     Builds sliding-window sequences from df using only the specified feature_cols.
-    Drops any rows with NaNs in those columns before fitting or transforming the scaler.
+    Drops any rows with NaNs in the present feature columns before fitting or transforming the scaler.
     Returns:
       X: np.array of shape (n_samples, seq_len, n_features)
       y: np.array of shape (n_samples,)
       scaler: fitted MinMaxScaler
     """
-    # 1) Drop rows where any of the selected features are NaN
-    df_clean = df.dropna(subset=feature_cols)
-    feats    = df_clean[feature_cols]
+    # 1) Determine which requested features actually exist in df
+    present_feats = [c for c in feature_cols if c in df.columns]
+    missing = set(feature_cols) - set(present_feats)
+    if missing:
+        print(f"Warning: missing features {missing}. Using only {present_feats}.")
 
-    # 2) Fit or reuse the scaler
+    # 2) Drop rows where any present feature is NaN
+    df_clean = df.dropna(subset=present_feats)
+    feats = df_clean[present_feats]
+
+    # 3) Fit or reuse the scaler
     if scaler is None:
         scaler = MinMaxScaler().fit(feats)
     scaled = scaler.transform(feats)
 
-    # 3) Slide a window of length seq_len to build X and y (next-day Close)
+    # 4) Slide a window of length seq_len to build X and y (next-day Close)
     X, y = [], []
-    close_idx = feature_cols.index('Close')
+    if 'Close' not in present_feats:
+        raise KeyError("Cannot build sequences because 'Close' column is missing after filtering features.")
+    close_idx = present_feats.index('Close')
     for i in range(seq_len, scaled.shape[0]):
         X.append(scaled[i-seq_len:i])
         y.append(scaled[i, close_idx])
 
     return np.array(X), np.array(y), scaler
-
 
 
 # -------------------- PyTorch Dataset --------------------
