@@ -74,10 +74,10 @@ def add_technical_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return df.dropna()
 
 # -------------------- Sequence Builder --------------------
-def build_sequences_cols(df: pd.DataFrame,
-                         seq_len: int,
-                         feature_cols: list,
-                         scaler: MinMaxScaler = None):
+def build_sequences(df: pd.DataFrame,
+                    seq_len: int,
+                    feature_cols: list,
+                    scaler: MinMaxScaler = None):
     """
     Build sliding-window sequences (X,y) of length seq_len over feature_cols.
     Fits a MinMaxScaler on train; reuses if provided.
@@ -86,7 +86,7 @@ def build_sequences_cols(df: pd.DataFrame,
     # 1) Ensure all required columns exist
     missing = set(feature_cols) - set(df.columns)
     if missing:
-        raise ValueError(f"build_sequences_cols: missing columns in DataFrame: {missing}")
+        raise ValueError(f"build_sequences: missing columns: {missing}")
     # 2) Drop rows with NaNs in those features
     df_clean = df.dropna(subset=feature_cols)
     feats    = df_clean[feature_cols]
@@ -106,6 +106,9 @@ def build_sequences_cols(df: pd.DataFrame,
         X.append(scaled[i-seq_len:i])
         y.append(scaled[i, close_idx])
     return np.array(X), np.array(y), scaler
+
+# Alias for backward compatibility
+build_sequences_cols = build_sequences
 
 # -------------------- PyTorch Dataset --------------------
 class SequenceDataset(Dataset):
